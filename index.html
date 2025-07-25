@@ -57,7 +57,7 @@
     main { grid-area: main; background: var(--bg-main); position: relative; }
     canvas { width: 100%; height: 100%; display: block; }
     /* Button styling with hover states */
-    .mode-btn, .control-btn, #copy-btn, #mute-btn {
+    .mode-btn, .control-btn, #snap-btn, #copy-btn, #mute-btn {
       background: var(--accent);
       color: var(--text-primary);
       border: none;
@@ -72,7 +72,7 @@
       background: var(--active-btn);
       color: #000;
     }
-    .mode-btn:hover, .control-btn:hover, #copy-btn:hover, #mute-btn:hover {
+    .mode-btn:hover, .control-btn:hover, #snap-btn:hover, #copy-btn:hover, #mute-btn:hover {
       background: var(--accent-light);
     }
     /* Export output area */
@@ -91,16 +91,11 @@
   </style>
 </head>
 <body>
-  <!-- Background music element -->
   <audio id="bg-music" src="mp3.mp3" loop></audio>
-  <!-- Header with title and music toggle -->
   <header>
     <div>Level Maker</div>
-    <div>
-      <button id="mute-btn">Play Music</button>
-    </div>
+    <div><button id="mute-btn">Play Music</button></div>
   </header>
-  <!-- Sidebar with mode and control buttons -->
   <nav id="sidebar-left">
     <button class="mode-btn" data-mode="play" onclick="setMode('play')">Play</button>
     <button class="mode-btn" data-mode="node" onclick="setMode('node')">Node Mode</button>
@@ -108,31 +103,28 @@
     <button class="mode-btn" data-mode="delete" onclick="setMode('delete')">Delete Mode</button>
     <button class="control-btn" onclick="undo()">Undo</button>
     <button class="control-btn" onclick="exportLevel()">Export</button>
+    <button id="snap-btn">Grid Snap: OFF</button>
   </nav>
-  <!-- Main canvas area -->
   <main><canvas id="gameCanvas"></canvas></main>
-  <!-- Export display and copy action -->
   <nav id="sidebar-right">
     <pre id="exportOutput"></pre>
     <button id="copy-btn">Copy</button>
   </nav>
-  <!-- Footer with copyright -->
   <footer>&copy; 2025 AlgoMarbler Ltd</footer>
   <script>
-    // Grab DOM elements
+    // DOM references
     const canvas = document.getElementById('gameCanvas'),
           ctx = canvas.getContext('2d'),
-          exportOutput = document.getElementById('exportOutput');
+          exportOutput = document.getElementById('exportOutput'),
+          snapBtn = document.getElementById('snap-btn');
 
     // State variables
     let width, height;
-    let mode = 'play';                     // current mode: play, node, edge, delete
-    let nodes = [];                        // array of {x,y} points
-    let edges = [];                        // array of [startIndex, endIndex]
-    let actionStack = [];                  // history for undo
-    let selectedNodes = [];                // temporary storage for edge creation
+    let mode = 'play';                    // current mode
+    let gridSnap = false;                // whether snapping is on
+    let nodes = [], edges = [], actionStack = [], selectedNodes = [];
 
-    // Resize canvas to match main area
+    // Resize canvas
     function resize() {
       width = canvas.width = document.querySelector('main').clientWidth;
       height = canvas.height = document.querySelector('main').clientHeight;
@@ -141,54 +133,58 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // Switch between modes (node/edge/delete/play)
+    // Toggle grid snap
+    snapBtn.addEventListener('click', () => {
+      gridSnap = !gridSnap;
+      snapBtn.textContent = `Grid Snap: ${gridSnap ? 'ON' : 'OFF'}`;
+    });
+
+    // Mode switching
     function setMode(m) {
-      mode = m;
-      selectedNodes = [];  // clear selection
-      // Highlight active button
+      mode = m; selectedNodes = [];
       document.querySelectorAll('.mode-btn').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.mode === m);
       });
       draw();
     }
 
-    // Undo last action (node, edge, deleteNode, deleteEdge)
+    // Undo
     function undo() {
       if (!actionStack.length) return;
       const last = actionStack.pop();
       switch (last.type) {
-        case 'node':
-          nodes.pop();
-          break;
-        case 'edge':
-          edges.pop();
-          break;
-        case 'deleteNode':
-          nodes = last.nodes;
-          edges = last.edges;
-          break;
-        case 'deleteEdge':
-          edges = last.edges;
-          break;
+        case 'node': nodes.pop(); break;
+        case 'edge': edges.pop(); break;
+        case 'deleteNode': nodes = last.nodes; edges = last.edges; break;
+        case 'deleteEdge': edges = last.edges; break;
       }
       selectedNodes = [];
       draw();
     }
 
-    // Handle canvas clicks based on mode
+    // Canvas click handler
     canvas.addEventListener('click', e => {
-      const rect = canvas.getBoundingClientRect();
-      const x = e.clientX - rect.left;
-      const y = e.clientY - rect.top;
+      const rect = canvas.getBoundingClientRect(),
+            x0 = e.clientX - rect.left,
+            y0 = e.clientY - rect.top;
+      let x = x0, y = y0;
+
+      // Snap to 0.1 grid if enabled
+      if (gridSnap && mode === 'node') {
+        const gx = Math.round((x0/width)/0.1)*0.1;
+        const gy = Math.round((y0/height)/0.1)*0.1;
+        x = gx * width;
+        y = gy * height;
+      }
 
       if (mode === 'node') {
         actionStack.push({ type: 'node' });
         nodes.push({ x, y });
       } else if (mode === 'edge') {
-        const idx = nodes.findIndex(p => Math.hypot(p.x - x, p.y - y) < 12);
+        const idx = nodes.findIndex(p => Math.hypot(p.x - x0, p.y - y0) < 12);
         if (idx >= 0) {
           const i = selectedNodes.indexOf(idx);
-          if (i >= 0) selectedNodes.splice(i, 1);
+          if (i >= 0) selectedNodes.splice(i,1);
           else selectedNodes.push(idx);
           if (selectedNodes.length === 2) {
             actionStack.push({ type: 'edge' });
@@ -197,106 +193,62 @@
           }
         }
       } else if (mode === 'delete') {
-        // Try deleting a node first
-        const nodeIdx = nodes.findIndex(p => Math.hypot(p.x - x, p.y - y) < 12);
+        // delete node or edge logic unchanged
+        const nodeIdx = nodes.findIndex(p => Math.hypot(p.x - x0, p.y - y0) < 12);
         if (nodeIdx >= 0) {
           actionStack.push({ type: 'deleteNode', nodes: nodes.slice(), edges: edges.slice() });
-          nodes.splice(nodeIdx, 1);
-          // Remove and re-index edges
-          edges = edges
-            .filter(e => e[0] !== nodeIdx && e[1] !== nodeIdx)
-            .map(e => [e[0] > nodeIdx ? e[0] - 1 : e[0], e[1] > nodeIdx ? e[1] - 1 : e[1]]);
+          nodes.splice(nodeIdx,1);
+          edges = edges.filter(e=>e[0]!==nodeIdx&&e[1]!==nodeIdx)
+                       .map(e=>[e[0]>nodeIdx?e[0]-1:e[0],e[1]>nodeIdx?e[1]-1:e[1]]);
         } else {
-          // Otherwise delete an edge if clicked near its line
           const edgeIdx = edges.findIndex(e => {
-            const p1 = nodes[e[0]], p2 = nodes[e[1]];
-            const dist = Math.abs((p2.y - p1.y) * x - (p2.x - p1.x) * y + p2.x * p1.y - p2.y * p1.x) /
-                         Math.hypot(p2.y - p1.y, p2.x - p1.x);
-            return dist < 6;
+            const p1=nodes[e[0]],p2=nodes[e[1]];
+            const dist=Math.abs((p2.y-p1.y)*x0-(p2.x-p1.x)*y0 + p2.x*p1.y - p2.y*p1.x)/Math.hypot(p2.y-p1.y,p2.x-p1.x);
+            return dist<6;
           });
-          if (edgeIdx >= 0) {
-            actionStack.push({ type: 'deleteEdge', edges: edges.slice() });
-            edges.splice(edgeIdx, 1);
-          }
-        }
+          if(edgeIdx>=0){actionStack.push({type:'deleteEdge',edges:edges.slice()});edges.splice(edgeIdx,1);}        }
       }
       draw();
     });
 
-    // Draw background grid at 0.1 intervals
+    // Draw grid lines
     function drawGrid() {
-      const xStep = width * 0.1;
-      const yStep = height * 0.1;
+      const xs = width*0.1, ys = height*0.1;
       ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid-light').trim();
       ctx.lineWidth = 1.5;
-      for (let x = 0; x <= width; x += xStep) {
-        ctx.beginPath();
-        ctx.moveTo(x, 0);
-        ctx.lineTo(x, height);
-        ctx.stroke();
-      }
-      for (let y = 0; y <= height; y += yStep) {
-        ctx.beginPath();
-        ctx.moveTo(0, y);
-        ctx.lineTo(width, y);
-        ctx.stroke();
-      }
+      for(let x=0;x<=width;x+=xs){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,height);ctx.stroke();}
+      for(let y=0;y<=height;y+=ys){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(width,y);ctx.stroke();}
     }
 
     // Render nodes and edges
     function draw() {
-      ctx.clearRect(0, 0, width, height);
+      ctx.clearRect(0,0,width,height);
       drawGrid();
-      // Draw edges
-      ctx.lineWidth = 3;
-      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--edge-default').trim();
-      edges.forEach(([a, b]) => {
-        const p1 = nodes[a], p2 = nodes[b];
-        ctx.beginPath();
-        ctx.moveTo(p1.x, p1.y);
-        ctx.lineTo(p2.x, p2.y);
-        ctx.stroke();
-      });
-      // Draw nodes
-      nodes.forEach((p, i) => {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 12, 0, 2 * Math.PI);
-        ctx.fillStyle = selectedNodes.includes(i)
-          ? getComputedStyle(document.documentElement).getPropertyValue('--node-highlight').trim()
-          : getComputedStyle(document.documentElement).getPropertyValue('--node-default').trim();
-        ctx.fill();
-      });
+      // edges
+      ctx.lineWidth=3;
+      ctx.strokeStyle=getComputedStyle(document.documentElement).getPropertyValue('--edge-default').trim();
+      edges.forEach(([a,b])=>{const p1=nodes[a],p2=nodes[b];ctx.beginPath();ctx.moveTo(p1.x,p1.y);ctx.lineTo(p2.x,p2.y);ctx.stroke();});
+      // nodes
+      nodes.forEach((p,i)=>{ctx.beginPath();ctx.arc(p.x,p.y,12,0,2*Math.PI);
+        ctx.fillStyle=selectedNodes.includes(i)?getComputedStyle(document.documentElement).getPropertyValue('--node-highlight').trim():getComputedStyle(document.documentElement).getPropertyValue('--node-default').trim();
+        ctx.fill();});
     }
 
-    // Round to significant figures for export
-    function roundSF(v, s) {
-      if (v === 0) return 0;
-      const m = Math.pow(10, s - Math.ceil(Math.log10(Math.abs(v))));
-      return Math.round(v * m) / m;
-    }
-    // Export level data as one-line JSON
-    function exportLevel() {
-      const pts = nodes.map(p => [roundSF(p.x / width, 3), roundSF(p.y / height, 3)]);
-      const lvl = { size: roundSF(0.025, 3), points: pts, edges: edges };
-      exportOutput.textContent = JSON.stringify(lvl);
-    }
+    // Helpers: round for export
+    function roundSF(v,s){if(v===0)return 0;const m=Math.pow(10,s-Math.ceil(Math.log10(Math.abs(v))));return Math.round(v*m)/m;}
+    function exportLevel(){const pts=nodes.map(p=>[roundSF(p.x/width,3),roundSF(p.y/height,3)]);const lvl={size:roundSF(0.025,3),points:pts,edges:edges};exportOutput.textContent=JSON.stringify(lvl);}
 
-        // Copy export data to clipboard
-    document.getElementById('copy-btn').addEventListener('click', () => {
-      // Check solvability: Eulerian path requires 0 or 2 nodes of odd degree
-      const deg = Array(nodes.length).fill(0);
-      edges.forEach(e => { deg[e[0]]++; deg[e[1]]++; });
-      const oddCount = deg.filter(d => d % 2 === 1).length;
-      if (oddCount > 2) {
-        alert('Warning: This Level is NOT Solvable!');
-      } else {
-        alert('Level Data Copied!');
-      }
+    // Copy and solvability warning
+    document.getElementById('copy-btn').addEventListener('click',()=>{
+      const deg=Array(nodes.length).fill(0);
+      edges.forEach(e=>{deg[e[0]]++;deg[e[1]]++;});
+      const oddCount=deg.filter(d=>d%2===1).length;
+      if(oddCount>2) alert('Warning: This Level is NOT Solvable!');
       navigator.clipboard.writeText(exportOutput.textContent);
     });
 
-    // Initialize default mode
-    setMode('play');('play');
+    // Default mode
+    setMode('play');
   </script>
 </body>
 </html>
