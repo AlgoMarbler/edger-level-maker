@@ -1,0 +1,302 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Level Maker</title>
+  <style>
+    /* Root variables for easy theming */
+    :root {
+      --bg-body: #2B003B;
+      --bg-alt:  #3E1F47;
+      --bg-main: #1E001F;
+      --accent: #FFB400;
+      --accent-light: #FFC857;
+      --edge-default: #B57EDC;
+      --node-default: #D3A4FF;
+      --node-highlight: #FFEE93;
+      --text-primary: #FFFFFF;
+      --grid-light: rgba(255,255,255,0.15);
+      --active-btn: #FFC857;
+    }
+    /* Layout styling using CSS grid */
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: var(--bg-body);
+      display: grid;
+      grid-template-rows: auto 1fr auto;        /* header, main, footer */
+      grid-template-columns: 250px 1fr 150px;    /* left sidebar, main, right sidebar */
+      grid-template-areas:
+        "header header header"
+        "sidebar-left main sidebar-right"
+        "footer footer footer";
+      height: 100vh;
+      color: var(--text-primary);
+    }
+    /* Header and footer share styling */
+    header, footer {
+      background: var(--bg-alt);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 20px;
+      border: 2px solid var(--accent);
+    }
+    /* Sidebar styling */
+    nav {
+      background: var(--bg-alt);
+      border: 2px solid var(--accent);
+      padding: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    #sidebar-left { grid-area: sidebar-left; }
+    #sidebar-right { grid-area: sidebar-right; display: flex; flex-direction: column; gap: 10px; }
+    main { grid-area: main; background: var(--bg-main); position: relative; }
+    canvas { width: 100%; height: 100%; display: block; }
+    /* Button styling with hover states */
+    .mode-btn, .control-btn, #copy-btn, #mute-btn {
+      background: var(--accent);
+      color: var(--text-primary);
+      border: none;
+      padding: 10px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 1.1rem;
+      text-align: left;
+      transition: background 0.2s;
+    }
+    .mode-btn.active {   /* highlight active mode */
+      background: var(--active-btn);
+      color: #000;
+    }
+    .mode-btn:hover, .control-btn:hover, #copy-btn:hover, #mute-btn:hover {
+      background: var(--accent-light);
+    }
+    /* Export output area */
+    #exportOutput {
+      background: var(--bg-alt);
+      border: 1px solid var(--accent);
+      color: var(--text-primary);
+      padding: 10px;
+      font-family: monospace;
+      height: 150px;
+      overflow: auto;
+      font-size: 0.9rem;
+      font-weight: bold;
+      white-space: nowrap;
+    }
+  </style>
+</head>
+<body>
+  <!-- Background music element -->
+  <audio id="bg-music" src="mp3.mp3" loop></audio>
+  <!-- Header with title and music toggle -->
+  <header>
+    <div>Level Maker</div>
+    <div>
+      <button id="mute-btn">Play Music</button>
+    </div>
+  </header>
+  <!-- Sidebar with mode and control buttons -->
+  <nav id="sidebar-left">
+    <button class="mode-btn" data-mode="play" onclick="setMode('play')">Play</button>
+    <button class="mode-btn" data-mode="node" onclick="setMode('node')">Node Mode</button>
+    <button class="mode-btn" data-mode="edge" onclick="setMode('edge')">Edge Mode</button>
+    <button class="mode-btn" data-mode="delete" onclick="setMode('delete')">Delete Mode</button>
+    <button class="control-btn" onclick="undo()">Undo</button>
+    <button class="control-btn" onclick="exportLevel()">Export</button>
+  </nav>
+  <!-- Main canvas area -->
+  <main><canvas id="gameCanvas"></canvas></main>
+  <!-- Export display and copy action -->
+  <nav id="sidebar-right">
+    <pre id="exportOutput"></pre>
+    <button id="copy-btn">Copy</button>
+  </nav>
+  <!-- Footer with copyright -->
+  <footer>&copy; 2025 AlgoMarbler Ltd</footer>
+  <script>
+    // Grab DOM elements
+    const canvas = document.getElementById('gameCanvas'),
+          ctx = canvas.getContext('2d'),
+          exportOutput = document.getElementById('exportOutput');
+
+    // State variables
+    let width, height;
+    let mode = 'play';                     // current mode: play, node, edge, delete
+    let nodes = [];                        // array of {x,y} points
+    let edges = [];                        // array of [startIndex, endIndex]
+    let actionStack = [];                  // history for undo
+    let selectedNodes = [];                // temporary storage for edge creation
+
+    // Resize canvas to match main area
+    function resize() {
+      width = canvas.width = document.querySelector('main').clientWidth;
+      height = canvas.height = document.querySelector('main').clientHeight;
+      draw();
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Switch between modes (node/edge/delete/play)
+    function setMode(m) {
+      mode = m;
+      selectedNodes = [];  // clear selection
+      // Highlight active button
+      document.querySelectorAll('.mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === m);
+      });
+      draw();
+    }
+
+    // Undo last action (node, edge, deleteNode, deleteEdge)
+    function undo() {
+      if (!actionStack.length) return;
+      const last = actionStack.pop();
+      switch (last.type) {
+        case 'node':
+          nodes.pop();
+          break;
+        case 'edge':
+          edges.pop();
+          break;
+        case 'deleteNode':
+          nodes = last.nodes;
+          edges = last.edges;
+          break;
+        case 'deleteEdge':
+          edges = last.edges;
+          break;
+      }
+      selectedNodes = [];
+      draw();
+    }
+
+    // Handle canvas clicks based on mode
+    canvas.addEventListener('click', e => {
+      const rect = canvas.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+
+      if (mode === 'node') {
+        actionStack.push({ type: 'node' });
+        nodes.push({ x, y });
+      } else if (mode === 'edge') {
+        const idx = nodes.findIndex(p => Math.hypot(p.x - x, p.y - y) < 12);
+        if (idx >= 0) {
+          const i = selectedNodes.indexOf(idx);
+          if (i >= 0) selectedNodes.splice(i, 1);
+          else selectedNodes.push(idx);
+          if (selectedNodes.length === 2) {
+            actionStack.push({ type: 'edge' });
+            edges.push([selectedNodes[0], selectedNodes[1]]);
+            selectedNodes = [];
+          }
+        }
+      } else if (mode === 'delete') {
+        // Try deleting a node first
+        const nodeIdx = nodes.findIndex(p => Math.hypot(p.x - x, p.y - y) < 12);
+        if (nodeIdx >= 0) {
+          actionStack.push({ type: 'deleteNode', nodes: nodes.slice(), edges: edges.slice() });
+          nodes.splice(nodeIdx, 1);
+          // Remove and re-index edges
+          edges = edges
+            .filter(e => e[0] !== nodeIdx && e[1] !== nodeIdx)
+            .map(e => [e[0] > nodeIdx ? e[0] - 1 : e[0], e[1] > nodeIdx ? e[1] - 1 : e[1]]);
+        } else {
+          // Otherwise delete an edge if clicked near its line
+          const edgeIdx = edges.findIndex(e => {
+            const p1 = nodes[e[0]], p2 = nodes[e[1]];
+            const dist = Math.abs((p2.y - p1.y) * x - (p2.x - p1.x) * y + p2.x * p1.y - p2.y * p1.x) /
+                         Math.hypot(p2.y - p1.y, p2.x - p1.x);
+            return dist < 6;
+          });
+          if (edgeIdx >= 0) {
+            actionStack.push({ type: 'deleteEdge', edges: edges.slice() });
+            edges.splice(edgeIdx, 1);
+          }
+        }
+      }
+      draw();
+    });
+
+    // Draw background grid at 0.1 intervals
+    function drawGrid() {
+      const xStep = width * 0.1;
+      const yStep = height * 0.1;
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--grid-light').trim();
+      ctx.lineWidth = 1.5;
+      for (let x = 0; x <= width; x += xStep) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, height);
+        ctx.stroke();
+      }
+      for (let y = 0; y <= height; y += yStep) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+    }
+
+    // Render nodes and edges
+    function draw() {
+      ctx.clearRect(0, 0, width, height);
+      drawGrid();
+      // Draw edges
+      ctx.lineWidth = 3;
+      ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--edge-default').trim();
+      edges.forEach(([a, b]) => {
+        const p1 = nodes[a], p2 = nodes[b];
+        ctx.beginPath();
+        ctx.moveTo(p1.x, p1.y);
+        ctx.lineTo(p2.x, p2.y);
+        ctx.stroke();
+      });
+      // Draw nodes
+      nodes.forEach((p, i) => {
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 12, 0, 2 * Math.PI);
+        ctx.fillStyle = selectedNodes.includes(i)
+          ? getComputedStyle(document.documentElement).getPropertyValue('--node-highlight').trim()
+          : getComputedStyle(document.documentElement).getPropertyValue('--node-default').trim();
+        ctx.fill();
+      });
+    }
+
+    // Round to significant figures for export
+    function roundSF(v, s) {
+      if (v === 0) return 0;
+      const m = Math.pow(10, s - Math.ceil(Math.log10(Math.abs(v))));
+      return Math.round(v * m) / m;
+    }
+    // Export level data as one-line JSON
+    function exportLevel() {
+      const pts = nodes.map(p => [roundSF(p.x / width, 3), roundSF(p.y / height, 3)]);
+      const lvl = { size: roundSF(0.025, 3), points: pts, edges: edges };
+      exportOutput.textContent = JSON.stringify(lvl);
+    }
+
+        // Copy export data to clipboard
+    document.getElementById('copy-btn').addEventListener('click', () => {
+      // Check solvability: Eulerian path requires 0 or 2 nodes of odd degree
+      const deg = Array(nodes.length).fill(0);
+      edges.forEach(e => { deg[e[0]]++; deg[e[1]]++; });
+      const oddCount = deg.filter(d => d % 2 === 1).length;
+      if (oddCount > 2) {
+        alert('Warning: This Level is NOT Solvable!');
+      } else {
+        alert('Level Data Copied!');
+      }
+      navigator.clipboard.writeText(exportOutput.textContent);
+    });
+
+    // Initialize default mode
+    setMode('play');('play');
+  </script>
+</body>
+</html>
